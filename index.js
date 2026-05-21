@@ -11,6 +11,7 @@ const STYLE_ID = "kanban-musume-style";
 const SCRIPT_ID = "kanban-musume-live2d-script";
 const IDLE_INTERVAL = 45000;
 const DRAG_CLICK_THRESHOLD = 4;
+const HITOKOTO_QUEUE_SIZE = 10;
 
 const ICONS = {
   heart: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7-4.43-9.33-9.11C.8 8.12 2.7 4 6.68 4A5.1 5.1 0 0 1 12 7.1 5.1 5.1 0 0 1 17.32 4c3.98 0 5.88 4.12 4.01 7.89C19 16.57 12 21 12 21Z"/></svg>',
@@ -28,6 +29,7 @@ const DEFAULT_SETTING = {
   position: "left",
   draggable: true,
   idleTipsEnabled: true,
+  hitokotoEnabled: true,
   currentModel: "HK416",
   models: [
     {
@@ -107,7 +109,7 @@ const DEFAULT_SETTING = {
       "现在这个想法值得加一个双链。"
     ],
     tooltips: {
-      random: "随机语句",
+      random: "随机一言",
       model: "切换模型",
       photo: "截图",
       info: "信息",
@@ -170,6 +172,7 @@ function normalizeSetting(value) {
     position: source.position === "left" ? "left" : "right",
     draggable: Boolean(source.draggable ?? DEFAULT_SETTING.draggable),
     idleTipsEnabled: Boolean(source.idleTipsEnabled ?? DEFAULT_SETTING.idleTipsEnabled),
+    hitokotoEnabled: Boolean(source.hitokotoEnabled ?? DEFAULT_SETTING.hitokotoEnabled),
     currentModel,
     models: safeModels,
     messages: mergeMessages(source.messages)
@@ -217,6 +220,29 @@ function pickMessage(value, data = {}) {
     return formatText(value, data);
   }
   return "";
+}
+
+async function fetchRandomHitokoto(timeout = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch("https://v1.hitokoto.cn/", {
+      signal: controller.signal,
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    if (data && typeof data.hitokoto === "string" && data.hitokoto.trim()) {
+      const text = data.hitokoto.trim();
+      const from = typeof data.from === "string" && data.from.trim() ? data.from.trim() : "";
+      return { text, from };
+    }
+    throw new Error("Empty hitokoto in response");
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function appendStrings(value, result) {
@@ -314,6 +340,8 @@ class KanbanMusumePlugin extends Plugin {
     this.messageTimer = 0;
     this.idleTimer = 0;
     this.lastRandomMessage = "";
+    this.hitokotoQueue = [];
+    this.hitokotoRefilling = false;
     this.isDragging = false;
     this.dragMode = "";
     this.dragMoved = false;
@@ -452,6 +480,7 @@ class KanbanMusumePlugin extends Plugin {
       await this.reloadModel(true);
       window.setTimeout(() => this.showGreeting(), 600);
     }
+    this.initHitokotoQueue();
   }
 
   buildToolbar() {
@@ -561,24 +590,80 @@ class KanbanMusumePlugin extends Plugin {
     return pickMessage(time[key]);
   }
 
-  showRandomMessage() {
-    const items = [];
-    appendStrings(this.setting.messages.random, items);
-    if (items.length === 0) {
-      appendStrings({
-        welcome: this.setting.messages.welcome,
-        time: this.setting.messages.time,
-        idle: this.setting.messages.idle,
-        touch: this.setting.messages.touch,
-        copy: this.setting.messages.copy,
-        visibilitychange: this.setting.messages.visibilitychange
-      }, items);
+  async initHitokotoQueue() {
+    this.hitokotoQueue = [];
+    if (!this.setting.hitokotoEnabled) {
+      return;
     }
-    const model = this.currentModel();
-    const text = formatText(randomItem(items, this.lastRandomMessage), {
-      model: model?.name || "",
-      modelId: model?.id || ""
-    });
+    const batch = [];
+    for (let i = 0; i < HITOKOTO_QUEUE_SIZE; i++) {
+      batch.push(
+        fetchRandomHitokoto().catch(() => null)
+      );
+    }
+    const results = await Promise.allSettled(batch);
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) {
+        this.hitokotoQueue.push(result.value);
+      }
+    }
+  }
+
+  refillHitokotoQueue() {
+    if (!this.setting.hitokotoEnabled || this.hitokotoRefilling) {
+      return;
+    }
+    this.hitokotoRefilling = true;
+    const fillOne = async () => {
+      while (this.hitokotoQueue.length < HITOKOTO_QUEUE_SIZE) {
+        try {
+          const item = await fetchRandomHitokoto();
+          if (item) {
+            this.hitokotoQueue.push(item);
+          }
+        } catch (error) {
+          console.warn(`[${PLUGIN_NAME}] Failed to refill hitokoto queue.`, error);
+          break;
+        }
+      }
+      this.hitokotoRefilling = false;
+    };
+    fillOne();
+  }
+
+  showRandomMessage() {
+    let text = "";
+
+    if (this.hitokotoQueue.length > 0) {
+      const item = this.hitokotoQueue.shift();
+      this.refillHitokotoQueue();
+      if (item.from) {
+        text = `${item.text} —— ${item.from}`;
+      } else {
+        text = item.text;
+      }
+    }
+
+    if (!text) {
+      const items = [];
+      appendStrings(this.setting.messages.random, items);
+      if (items.length === 0) {
+        appendStrings({
+          welcome: this.setting.messages.welcome,
+          time: this.setting.messages.time,
+          idle: this.setting.messages.idle,
+          touch: this.setting.messages.touch,
+          copy: this.setting.messages.copy,
+          visibilitychange: this.setting.messages.visibilitychange
+        }, items);
+      }
+      const model = this.currentModel();
+      text = formatText(randomItem(items, this.lastRandomMessage), {
+        model: model?.name || "",
+        modelId: model?.id || ""
+      });
+    }
+
     this.lastRandomMessage = text;
     this.showDialogText(text);
   }
@@ -812,6 +897,7 @@ class KanbanMusumePlugin extends Plugin {
     ], this.setting.position);
     const draggableInput = this.createCheckbox(this.setting.draggable);
     const idleInput = this.createCheckbox(this.setting.idleTipsEnabled);
+    const hitokotoInput = this.createCheckbox(this.setting.hitokotoEnabled);
     const currentSelect = this.createModelSelect(this.setting.currentModel);
     const modelBody = document.createElement("tbody");
     const messageArea = document.createElement("textarea");
@@ -822,6 +908,7 @@ class KanbanMusumePlugin extends Plugin {
     panel.appendChild(this.createRow("位置", "选择看板娘贴靠屏幕左侧或右侧。", positionSelect));
     panel.appendChild(this.createRow("允许拖拽", "关闭后看板娘固定在所选侧边。", draggableInput));
     panel.appendChild(this.createRow("空闲提示", "定时显示 idle 文案。", idleInput));
+    panel.appendChild(this.createRow("一言 Hitokoto", "从 Hitokoto API 获取随机一言，失败时使用本地随机文案", hitokotoInput));
     panel.appendChild(this.createRow("当前模型", "选择后会立即保存并重新加载模型。", currentSelect));
 
     const modelTable = this.createModelTable(modelBody);
@@ -846,6 +933,7 @@ class KanbanMusumePlugin extends Plugin {
         positionSelect,
         draggableInput,
         idleInput,
+        hitokotoInput,
         currentSelect,
         modelBody,
         messageArea
@@ -958,6 +1046,7 @@ class KanbanMusumePlugin extends Plugin {
       position: elements.positionSelect.value,
       draggable: elements.draggableInput.checked,
       idleTipsEnabled: elements.idleInput.checked,
+      hitokotoEnabled: elements.hitokotoInput.checked,
       currentModel: elements.currentSelect.value,
       models,
       messages
