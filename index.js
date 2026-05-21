@@ -235,10 +235,7 @@ async function fetchRandomHitokoto(timeout = 5000) {
     }
     const data = await response.json();
     if (data && typeof data.hitokoto === "string" && data.hitokoto.trim()) {
-      const text = data.hitokoto.trim();
-      const from = typeof data.from === "string" && data.from.trim() ? data.from.trim() : "";
-      const fromWho = typeof data.from_who === "string" && data.from_who.trim() ? data.from_who.trim() : "";
-      return { text, from, fromWho };
+      return data.hitokoto.trim();
     }
     throw new Error("Empty hitokoto in response");
   } finally {
@@ -342,7 +339,6 @@ class KanbanMusumePlugin extends Plugin {
     this.idleTimer = 0;
     this.lastRandomMessage = "";
     this.hitokotoQueue = [];
-    this.hitokotoSeen = new Set();
     this.hitokotoRefilling = false;
     this.hitokotoRetryTimer = 0;
     this.hitokotoRetryCount = 0;
@@ -597,7 +593,6 @@ class KanbanMusumePlugin extends Plugin {
 
   initHitokotoQueue() {
     this.hitokotoQueue = [];
-    this.hitokotoSeen = new Set();
     this.hitokotoRetryCount = 0;
     clearTimeout(this.hitokotoRetryTimer);
     if (!this.setting.hitokotoEnabled) {
@@ -611,13 +606,9 @@ class KanbanMusumePlugin extends Plugin {
     }
     Promise.allSettled(batch).then((results) => {
       for (const result of results) {
-        if (result.status === "fulfilled" && result.value && !this.hitokotoSeen.has(result.value.text)) {
-          this.hitokotoSeen.add(result.value.text);
+        if (result.status === "fulfilled" && result.value) {
           this.hitokotoQueue.push(result.value);
         }
-      }
-      if (this.hitokotoSeen.size > 500) {
-        this.hitokotoSeen = new Set([...this.hitokotoSeen].slice(-200));
       }
       if (this.hitokotoQueue.length === 0 && this.setting.hitokotoEnabled && this.hitokotoRetryCount < 3) {
         this.hitokotoRetryCount++;
@@ -643,25 +634,18 @@ class KanbanMusumePlugin extends Plugin {
             const results = await Promise.allSettled(batch);
             for (const result of results) {
               if (!this.setting.hitokotoEnabled) break;
-              if (result.status === "fulfilled" && result.value && !this.hitokotoSeen.has(result.value.text)) {
-                this.hitokotoSeen.add(result.value.text);
-                if (this.hitokotoSeen.size > 500) {
-                  this.hitokotoSeen = new Set([...this.hitokotoSeen].slice(-200));
-                }
+              if (result.status === "fulfilled" && result.value) {
                 this.hitokotoQueue.push(result.value);
               }
             }
           } else {
             const item = await fetchRandomHitokoto();
             if (!this.setting.hitokotoEnabled) break;
-            if (item && !this.hitokotoSeen.has(item.text)) {
-              this.hitokotoSeen.add(item.text);
-              if (this.hitokotoSeen.size > 500) {
-                this.hitokotoSeen = new Set([...this.hitokotoSeen].slice(-200));
-              }
+            if (item) {
               this.hitokotoQueue.push(item);
             }
           }
+        }
       } catch (error) {
         console.warn(`[${PLUGIN_NAME}] Failed to refill hitokoto queue.`, error);
       } finally {
@@ -677,15 +661,7 @@ class KanbanMusumePlugin extends Plugin {
     }
 
     if (this.hitokotoQueue.length > 0) {
-      const item = this.hitokotoQueue.shift();
-      let text = item.text;
-      const parts = [];
-      if (item.fromWho) parts.push(item.fromWho);
-      if (item.from) {
-        const source = item.from.replace(/^《|》$/g, "");
-        parts.push(`《${source}》`);
-      }
-      if (parts.length > 0) text = `${text} —— ${parts.join(" ")}`;
+      const text = this.hitokotoQueue.shift();
       this.refillHitokotoQueue();
       return { text, timeout: 6000 };
     }
