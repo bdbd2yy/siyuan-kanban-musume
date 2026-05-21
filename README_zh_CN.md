@@ -1,12 +1,29 @@
-# 思源看板娘
+[English](README.md)
 
-本地优先的思源 Live2D 看板娘插件。
+# siyuan-kanban-musume
 
-## 功能
+<img src="./icon.png" width="160" height="160" alt="icon">
 
-- 内置本地 Cubism 2 模型：`416`、`pio`、`chino`。
-- 支持欢迎语、时间问候、空闲提示、点击身体、复制提示、窗口重新可见提示。
-- 工具栏提供随机语句、切换模型、截图、信息、隐藏和设置。
-- 设置面板可调整位置、拖拽、空闲提示、当前模型、模型列表和交互文案 JSON。
+让可爱的小看板娘陪伴你写笔记
 
-配置保存在 `kanban-musume-setting.json`。
+## 核心功能
+
+- **轻量简洁**：除 Live2D 外，本项目没有其他依赖
+- **切换模型**：支持切换模型。内置模型：`416`、`pio` 和 `chino`。
+- **更多互动**：时间问候、欢迎消息、闲置提示、复制提示、触摸提示以及重新显示时的提示。
+- **工具栏操作**：包括随机消息、模型切换、截图、信息、隐藏和设置。
+- **设置面板**：可设置位置、拖拽、闲置提示、模型选择、可编辑模型列表以及消息 JSON。
+
+## 开源协议
+
+由于原项目使用 GPL 2.0 协议，因此本项目也采用相同的开源协议进行授权。
+
+## 致谢
+
+感谢开源社区提供的解决方案，这为本项目简化了大量工作！
+
+- [siyuan-plugin-kanban-girl](https://github.com/terwer/siyuan-plugin-kanban-girl)
+- [waifu.js](https://github.com/Waifu-pics/waifu.js)
+- [Live2D](https://www.live2d.com)
+- [Live2D-SRC](https://github.com/journey-ad/live2d_src)
+- [Pio](https://github.com/Dreamer-Paul/Pio)
