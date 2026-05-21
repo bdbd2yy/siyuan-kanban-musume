@@ -1,0 +1,25 @@
+{
+  "name": "siyuan-kanban-musume",
+  "author": "bdbd",
+  "url": "https://github.com/terwer/siyuan-plugin-kanban-girl",
+  "version": "0.1.0",
+  "displayName": {
+    "default": "SiYuan Kanban Musume",
+    "zh_CN": "思源看板娘"
+  },
+  "description": {
+    "default": "A local-first Live2D kanban companion for SiYuan",
+    "zh_CN": "本地优先的思源 Live2D 看板娘"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh_CN": "README_zh_CN.md"
+  },
+  "i18n": [
+    "en_US",
+    "zh_CN"
+  ],
+  "funding": {
+    "custom": []
+  }
+}
