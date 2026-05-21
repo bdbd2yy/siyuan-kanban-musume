@@ -186,6 +186,12 @@
 
 .km-hidden .km-show {
   display: flex;
+  cursor: grab;
+}
+
+.km-hidden.km-dragging .km-show {
+  cursor: grabbing;
+  transition: none;
 }
 
 .km-settings {

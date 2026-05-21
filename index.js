@@ -10,6 +10,7 @@ const CANVAS_ID = "kanban-musume-live2d";
 const STYLE_ID = "kanban-musume-style";
 const SCRIPT_ID = "kanban-musume-live2d-script";
 const IDLE_INTERVAL = 45000;
+const DRAG_CLICK_THRESHOLD = 4;
 
 const ICONS = {
   heart: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7-4.43-9.33-9.11C.8 8.12 2.7 4 6.68 4A5.1 5.1 0 0 1 12 7.1 5.1 5.1 0 0 1 17.32 4c3.98 0 5.88 4.12 4.01 7.89C19 16.57 12 21 12 21Z"/></svg>',
@@ -24,13 +25,13 @@ const ICONS = {
 
 const DEFAULT_SETTING = {
   hidden: false,
-  position: "right",
+  position: "left",
   draggable: true,
   idleTipsEnabled: true,
-  currentModel: "416",
+  currentModel: "HK416",
   models: [
     {
-      id: "416",
+      id: "HK416",
       name: "416",
       path: `${PLUGIN_BASE}/models/416/model.json`
     },
@@ -48,47 +49,50 @@ const DEFAULT_SETTING = {
   messages: {
     welcome: [
       "欢迎使用思源笔记。",
-      "今天也一起整理一点想法吧。"
+      "今天也一起整理一点想法吧。",
+      "你回来啦"
     ],
     time: {
       lateNight: [
         "夜已经深了，写完这一段就早点休息吧。"
       ],
       morning: [
-        "早上好，今天也从清爽的第一条笔记开始。"
+        "早上好，你居然可以起得这么早呢"
       ],
       forenoon: [
-        "上午好，保持节奏，不用急。"
+        "上午好，享受上午的时光吧"
       ],
       noon: [
-        "中午了，记得吃饭和休息。"
+        "中午了，记得吃饭和休息"
       ],
       afternoon: [
-        "下午容易犯困，起身活动一下也不错。"
+        "下午容易犯困，要不要偷偷眯一下呢"
       ],
       evening: [
-        "傍晚好，收束一下今天的线索吧。"
+        "傍晚好，收束一下今天的线索吧"
       ],
       night: [
-        "晚上好，适合复盘，也适合安静写作。"
+        "晚上好，适合复盘，也适合安静写作"
       ]
     },
     idle: [
-      "我还在这里，有需要就叫我。",
-      "空白也是一种缓冲，慢慢想。"
+      "我还在这里，有需要就叫我",
+      "空白也是一种缓冲，慢慢想"
     ],
     touch: [
-      "在呢。",
-      "别戳太用力啦。",
-      "想到新点子了吗？"
+      "在呢",
+      "别戳太用力啦",
+      "想到新点子了吗？",
+      "认真写笔记，不许摸鱼！",
+      "再点我，就把你的todo加倍！"
     ],
     copy: [
-      "已复制，别忘了标注来源。",
-      "这段内容看起来很有用。"
+      "已复制，别忘了标注来源",
+      "这段内容看起来很有用"
     ],
     visibilitychange: [
-      "欢迎回来。",
-      "刚才的思路还在这里。"
+      "欢迎回来",
+      "刚才的思路还在这里"
     ],
     random: [
       "灵感通常不是等来的，是写着写着浮出来的。",
@@ -112,13 +116,13 @@ const DEFAULT_SETTING = {
       show: "展开看板娘"
     },
     goodbye: [
-      "我先藏起来，需要时再叫我。"
+      "我先藏起来，需要时再叫我"
     ],
     modelChanged: [
-      "已切换到 {name}。"
+      "你好，现在是{name}在看着你"
     ],
     photo: [
-      "已经保存当前看板娘截图。"
+      "你又在给我拍照啦"
     ]
   }
 };
@@ -311,7 +315,12 @@ class KanbanMusumePlugin extends Plugin {
     this.idleTimer = 0;
     this.lastRandomMessage = "";
     this.isDragging = false;
+    this.dragMode = "";
+    this.dragMoved = false;
     this.dragOffset = { x: 0, y: 0 };
+    this.dragStart = { x: 0, y: 0 };
+    this.suppressShowButtonClick = false;
+    this.suppressShowButtonClickTimer = 0;
     this.boundCopyHandler = () => this.showMessage("copy");
     this.boundVisibilityHandler = () => {
       if (!document.hidden) {
@@ -334,6 +343,7 @@ class KanbanMusumePlugin extends Plugin {
 
   onunload() {
     clearTimeout(this.messageTimer);
+    clearTimeout(this.suppressShowButtonClickTimer);
     clearInterval(this.idleTimer);
     document.removeEventListener("copy", this.boundCopyHandler);
     document.removeEventListener("visibilitychange", this.boundVisibilityHandler);
@@ -428,7 +438,14 @@ class KanbanMusumePlugin extends Plugin {
 
     this.canvas.addEventListener("click", () => this.showMessage("touch"));
     stage.addEventListener("mousedown", (event) => this.onDragStart(event));
-    this.showButton.addEventListener("click", () => this.setHidden(false));
+    this.showButton.addEventListener("mousedown", (event) => this.onShowButtonDragStart(event));
+    this.showButton.addEventListener("click", () => {
+      if (this.suppressShowButtonClick) {
+        this.suppressShowButtonClick = false;
+        return;
+      }
+      this.setHidden(false);
+    });
 
     this.applyWidgetClasses();
     if (!this.setting.hidden) {
@@ -627,11 +644,15 @@ class KanbanMusumePlugin extends Plugin {
     if (hidden) {
       this.showMessage("goodbye");
       await this.saveSetting({ ...this.setting, hidden: true });
-      window.setTimeout(() => this.applyWidgetClasses(), 450);
+      window.setTimeout(() => {
+        this.resetPlacement(this.setting.position);
+        this.applyWidgetClasses();
+      }, 450);
       return;
     }
     await this.saveSetting({ ...this.setting, hidden: false });
     this.applyWidgetClasses();
+    this.clampVisiblePlacement();
     await this.reloadModel(true);
     this.showGreeting();
   }
@@ -642,8 +663,32 @@ class KanbanMusumePlugin extends Plugin {
     }
     const rect = this.root.getBoundingClientRect();
     this.isDragging = true;
+    this.dragMode = "stage";
+    this.dragMoved = false;
     this.dragOffset.x = event.clientX - rect.left;
     this.dragOffset.y = event.clientY - rect.top;
+    this.dragStart.x = event.clientX;
+    this.dragStart.y = event.clientY;
+    this.root.classList.add("km-dragging");
+    document.addEventListener("mousemove", this.boundDragMove);
+    document.addEventListener("mouseup", this.boundDragEnd);
+  }
+
+  onShowButtonDragStart(event) {
+    if (!this.setting.draggable || !this.setting.hidden) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const rect = this.showButton.getBoundingClientRect();
+    this.isDragging = true;
+    this.dragMode = "showButton";
+    this.dragMoved = false;
+    this.dragOffset.x = event.clientX - rect.left;
+    this.dragOffset.y = event.clientY - rect.top;
+    this.dragStart.x = event.clientX;
+    this.dragStart.y = event.clientY;
     this.root.classList.add("km-dragging");
     document.addEventListener("mousemove", this.boundDragMove);
     document.addEventListener("mouseup", this.boundDragEnd);
@@ -653,6 +698,19 @@ class KanbanMusumePlugin extends Plugin {
     if (!this.isDragging) {
       return;
     }
+    if (
+      !this.dragMoved &&
+      (Math.abs(event.clientX - this.dragStart.x) > DRAG_CLICK_THRESHOLD ||
+        Math.abs(event.clientY - this.dragStart.y) > DRAG_CLICK_THRESHOLD)
+    ) {
+      this.dragMoved = true;
+    }
+
+    if (this.dragMode === "showButton") {
+      this.moveShowButtonAlongEdge(event);
+      return;
+    }
+
     const left = Math.max(0, Math.min(window.innerWidth - this.root.offsetWidth, event.clientX - this.dragOffset.x));
     const top = Math.max(0, Math.min(window.innerHeight - this.root.offsetHeight, event.clientY - this.dragOffset.y));
     this.root.style.left = `${left}px`;
@@ -661,8 +719,56 @@ class KanbanMusumePlugin extends Plugin {
     this.root.style.bottom = "auto";
   }
 
+  moveShowButtonAlongEdge(event) {
+    const rect = this.showButton.getBoundingClientRect();
+    const buttonHeight = rect.height || this.showButton.offsetHeight || 42;
+    const computed = window.getComputedStyle(this.showButton);
+    const edgeOffset = Number.parseFloat(computed.bottom) || 0;
+    const top = Math.max(0, Math.min(window.innerHeight - buttonHeight, event.clientY - this.dragOffset.y));
+    const bottom = Math.max(0, window.innerHeight - top - buttonHeight - edgeOffset);
+
+    this.root.style.top = "";
+    this.root.style.bottom = `${bottom}px`;
+    if (this.setting.position === "left") {
+      this.root.style.left = "0";
+      this.root.style.right = "auto";
+    } else {
+      this.root.style.left = "auto";
+      this.root.style.right = "0";
+    }
+  }
+
+  clampVisiblePlacement() {
+    if (!this.root || this.setting.hidden) {
+      return;
+    }
+    const rect = this.root.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      return;
+    }
+    const left = Math.max(0, Math.min(window.innerWidth - rect.width, rect.left));
+    const top = Math.max(0, Math.min(window.innerHeight - rect.height, rect.top));
+    if (left === rect.left && top === rect.top) {
+      return;
+    }
+    this.root.style.left = `${left}px`;
+    this.root.style.top = `${top}px`;
+    this.root.style.right = "auto";
+    this.root.style.bottom = "auto";
+  }
+
   onDragEnd() {
+    const shouldSuppressClick = this.dragMode === "showButton" && this.dragMoved;
     this.isDragging = false;
+    this.dragMode = "";
+    this.dragMoved = false;
+    clearTimeout(this.suppressShowButtonClickTimer);
+    this.suppressShowButtonClick = shouldSuppressClick;
+    if (shouldSuppressClick) {
+      this.suppressShowButtonClickTimer = window.setTimeout(() => {
+        this.suppressShowButtonClick = false;
+      }, 250);
+    }
     this.root?.classList.remove("km-dragging");
     document.removeEventListener("mousemove", this.boundDragMove);
     document.removeEventListener("mouseup", this.boundDragEnd);
