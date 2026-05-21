@@ -90,6 +90,18 @@ const DEFAULT_SETTING = {
       "欢迎回来。",
       "刚才的思路还在这里。"
     ],
+    random: [
+      "灵感通常不是等来的，是写着写着浮出来的。",
+      "先记下来，稍后再决定它是不是好想法。",
+      "今天可以只推进一个很小但确定的步骤。",
+      "复杂的内容，先拆成三个标题。",
+      "如果卡住了，换一种问法。",
+      "一条清晰的笔记，比十条模糊的收藏更有价值。",
+      "把结论写在前面，未来的你会感谢现在的你。",
+      "不用一次写完，先留下可继续的线索。",
+      "整理不是为了漂亮，是为了下次更快找到。",
+      "现在这个想法值得加一个双链。"
+    ],
     tooltips: {
       random: "随机语句",
       model: "切换模型",
@@ -160,11 +172,31 @@ function normalizeSetting(value) {
   };
 }
 
-function randomItem(items) {
+function randomIndex(length) {
+  if (length <= 0) {
+    return -1;
+  }
+  const cryptoApi = globalThis.crypto;
+  if (cryptoApi?.getRandomValues) {
+    const bucketSize = 0x100000000;
+    const limit = bucketSize - (bucketSize % length);
+    const values = new Uint32Array(1);
+    do {
+      cryptoApi.getRandomValues(values);
+    } while (values[0] >= limit);
+    return values[0] % length;
+  }
+  return Math.floor(Math.random() * length);
+}
+
+function randomItem(items, previousItem = "") {
   if (!Array.isArray(items) || items.length === 0) {
     return "";
   }
-  return items[Math.floor(Math.random() * items.length)];
+  const candidates = previousItem && items.length > 1
+    ? items.filter((item) => item !== previousItem)
+    : items;
+  return candidates[randomIndex(candidates.length)] || "";
 }
 
 function formatText(text, data = {}) {
@@ -277,6 +309,7 @@ class KanbanMusumePlugin extends Plugin {
     this.loadedModelPath = "";
     this.messageTimer = 0;
     this.idleTimer = 0;
+    this.lastRandomMessage = "";
     this.isDragging = false;
     this.dragOffset = { x: 0, y: 0 };
     this.boundCopyHandler = () => this.showMessage("copy");
@@ -513,14 +546,24 @@ class KanbanMusumePlugin extends Plugin {
 
   showRandomMessage() {
     const items = [];
-    appendStrings({
-      welcome: this.setting.messages.welcome,
-      idle: this.setting.messages.idle,
-      touch: this.setting.messages.touch,
-      copy: this.setting.messages.copy,
-      visibilitychange: this.setting.messages.visibilitychange
-    }, items);
-    this.showDialogText(randomItem(items));
+    appendStrings(this.setting.messages.random, items);
+    if (items.length === 0) {
+      appendStrings({
+        welcome: this.setting.messages.welcome,
+        time: this.setting.messages.time,
+        idle: this.setting.messages.idle,
+        touch: this.setting.messages.touch,
+        copy: this.setting.messages.copy,
+        visibilitychange: this.setting.messages.visibilitychange
+      }, items);
+    }
+    const model = this.currentModel();
+    const text = formatText(randomItem(items, this.lastRandomMessage), {
+      model: model?.name || "",
+      modelId: model?.id || ""
+    });
+    this.lastRandomMessage = text;
+    this.showDialogText(text);
   }
 
   restartIdleTimer() {
