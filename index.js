@@ -121,7 +121,7 @@ const DEFAULT_SETTING = {
       "我先藏起来，需要时再叫我"
     ],
     modelChanged: [
-      "你好，现在是{name}在看着你"
+      "你好，现在是 {name} 在看着你"
     ],
     photo: [
       "你又在给我拍照啦"
@@ -237,7 +237,8 @@ async function fetchRandomHitokoto(timeout = 5000) {
     if (data && typeof data.hitokoto === "string" && data.hitokoto.trim()) {
       const text = data.hitokoto.trim();
       const from = typeof data.from === "string" && data.from.trim() ? data.from.trim() : "";
-      return { text, from };
+      const fromWho = typeof data.from_who === "string" && data.from_who.trim() ? data.from_who.trim() : "";
+      return { text, from, fromWho };
     }
     throw new Error("Empty hitokoto in response");
   } finally {
@@ -341,7 +342,10 @@ class KanbanMusumePlugin extends Plugin {
     this.idleTimer = 0;
     this.lastRandomMessage = "";
     this.hitokotoQueue = [];
+    this.hitokotoSeen = new Set();
     this.hitokotoRefilling = false;
+    this.hitokotoRetryTimer = 0;
+    this.hitokotoRetryCount = 0;
     this.isDragging = false;
     this.dragMode = "";
     this.dragMoved = false;
@@ -372,6 +376,7 @@ class KanbanMusumePlugin extends Plugin {
   onunload() {
     clearTimeout(this.messageTimer);
     clearTimeout(this.suppressShowButtonClickTimer);
+    clearTimeout(this.hitokotoRetryTimer);
     clearInterval(this.idleTimer);
     document.removeEventListener("copy", this.boundCopyHandler);
     document.removeEventListener("visibilitychange", this.boundVisibilityHandler);
@@ -590,8 +595,11 @@ class KanbanMusumePlugin extends Plugin {
     return pickMessage(time[key]);
   }
 
-  async initHitokotoQueue() {
+  initHitokotoQueue() {
     this.hitokotoQueue = [];
+    this.hitokotoSeen = new Set();
+    this.hitokotoRetryCount = 0;
+    clearTimeout(this.hitokotoRetryTimer);
     if (!this.setting.hitokotoEnabled) {
       return;
     }
@@ -601,12 +609,21 @@ class KanbanMusumePlugin extends Plugin {
         fetchRandomHitokoto().catch(() => null)
       );
     }
-    const results = await Promise.allSettled(batch);
-    for (const result of results) {
-      if (result.status === "fulfilled" && result.value) {
-        this.hitokotoQueue.push(result.value);
+    Promise.allSettled(batch).then((results) => {
+      for (const result of results) {
+        if (result.status === "fulfilled" && result.value && !this.hitokotoSeen.has(result.value.text)) {
+          this.hitokotoSeen.add(result.value.text);
+          this.hitokotoQueue.push(result.value);
+        }
       }
-    }
+      if (this.hitokotoSeen.size > 500) {
+        this.hitokotoSeen = new Set([...this.hitokotoSeen].slice(-200));
+      }
+      if (this.hitokotoQueue.length === 0 && this.setting.hitokotoEnabled && this.hitokotoRetryCount < 3) {
+        this.hitokotoRetryCount++;
+        this.hitokotoRetryTimer = window.setTimeout(() => this.initHitokotoQueue(), 30000);
+      }
+    });
   }
 
   refillHitokotoQueue() {
@@ -614,35 +631,73 @@ class KanbanMusumePlugin extends Plugin {
       return;
     }
     this.hitokotoRefilling = true;
-    const fillOne = async () => {
-      while (this.hitokotoQueue.length < HITOKOTO_QUEUE_SIZE) {
-        try {
-          const item = await fetchRandomHitokoto();
-          if (item) {
-            this.hitokotoQueue.push(item);
+    const fillQueue = async () => {
+      try {
+        while (this.setting.hitokotoEnabled && this.hitokotoQueue.length < HITOKOTO_QUEUE_SIZE) {
+          const needed = HITOKOTO_QUEUE_SIZE - this.hitokotoQueue.length;
+          if (needed >= 7) {
+            const batch = [];
+            for (let i = 0; i < 3 && i < needed; i++) {
+              batch.push(fetchRandomHitokoto().catch(() => null));
+            }
+            const results = await Promise.allSettled(batch);
+            for (const result of results) {
+              if (!this.setting.hitokotoEnabled) break;
+              if (result.status === "fulfilled" && result.value && !this.hitokotoSeen.has(result.value.text)) {
+                this.hitokotoSeen.add(result.value.text);
+                if (this.hitokotoSeen.size > 500) {
+                  this.hitokotoSeen = new Set([...this.hitokotoSeen].slice(-200));
+                }
+                this.hitokotoQueue.push(result.value);
+              }
+            }
+          } else {
+            const item = await fetchRandomHitokoto();
+            if (!this.setting.hitokotoEnabled) break;
+            if (item && !this.hitokotoSeen.has(item.text)) {
+              this.hitokotoSeen.add(item.text);
+              if (this.hitokotoSeen.size > 500) {
+                this.hitokotoSeen = new Set([...this.hitokotoSeen].slice(-200));
+              }
+              this.hitokotoQueue.push(item);
+            }
           }
-        } catch (error) {
-          console.warn(`[${PLUGIN_NAME}] Failed to refill hitokoto queue.`, error);
-          break;
-        }
+      } catch (error) {
+        console.warn(`[${PLUGIN_NAME}] Failed to refill hitokoto queue.`, error);
+      } finally {
+        this.hitokotoRefilling = false;
       }
-      this.hitokotoRefilling = false;
     };
-    fillOne();
+    fillQueue();
   }
 
-  showRandomMessage() {
-    let text = "";
+  tryUseHitokotoQueue() {
+    if (!this.setting.hitokotoEnabled) {
+      return { text: "", timeout: 3600 };
+    }
 
     if (this.hitokotoQueue.length > 0) {
       const item = this.hitokotoQueue.shift();
-      this.refillHitokotoQueue();
+      let text = item.text;
+      const parts = [];
+      if (item.fromWho) parts.push(item.fromWho);
       if (item.from) {
-        text = `${item.text} —— ${item.from}`;
-      } else {
-        text = item.text;
+        const source = item.from.replace(/^《|》$/g, "");
+        parts.push(`《${source}》`);
       }
+      if (parts.length > 0) text = `${text} —— ${parts.join(" ")}`;
+      this.refillHitokotoQueue();
+      return { text, timeout: 6000 };
     }
+
+    this.refillHitokotoQueue();
+    return { text: "", timeout: 3600 };
+  }
+
+  showRandomMessage() {
+    const result = this.tryUseHitokotoQueue();
+    let text = result.text;
+    let timeout = result.timeout;
 
     if (!text) {
       const items = [];
@@ -665,7 +720,7 @@ class KanbanMusumePlugin extends Plugin {
     }
 
     this.lastRandomMessage = text;
-    this.showDialogText(text);
+    this.showDialogText(text, timeout);
   }
 
   restartIdleTimer() {
@@ -1041,6 +1096,7 @@ class KanbanMusumePlugin extends Plugin {
 
     const previousPosition = this.setting.position;
     const previousModel = this.currentModel();
+    const wasHitokotoEnabled = this.setting.hitokotoEnabled;
     const next = normalizeSetting({
       hidden: elements.hiddenInput.checked,
       position: elements.positionSelect.value,
@@ -1056,6 +1112,9 @@ class KanbanMusumePlugin extends Plugin {
     const shouldReload = previousModel?.id !== nextModel.id || previousModel?.path !== nextModel.path;
 
     await this.saveSetting(next);
+    if (!wasHitokotoEnabled && this.setting.hitokotoEnabled) {
+      this.initHitokotoQueue();
+    }
     if (previousPosition !== this.setting.position || !this.setting.draggable) {
       this.resetPlacement(this.setting.position);
     }
