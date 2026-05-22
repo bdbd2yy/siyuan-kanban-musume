@@ -549,9 +549,21 @@ class KanbanMusumePlugin extends Plugin {
     if (!this.dialog || !text || this.setting.hidden) {
       return;
     }
+    clearTimeout(this.messageTimer);
+    const wasActive = this.dialog.classList.contains("km-active");
+    if (wasActive && this.dialog.textContent !== text) {
+      this.dialog.classList.remove("km-active");
+      window.setTimeout(() => {
+        this.dialog.textContent = text;
+        this.dialog.classList.add("km-active");
+        this.messageTimer = window.setTimeout(() => {
+          this.dialog?.classList.remove("km-active");
+        }, time);
+      }, 120);
+      return;
+    }
     this.dialog.textContent = text;
     this.dialog.classList.add("km-active");
-    clearTimeout(this.messageTimer);
     this.messageTimer = window.setTimeout(() => {
       this.dialog?.classList.remove("km-active");
     }, time);
