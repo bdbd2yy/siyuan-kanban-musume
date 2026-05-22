@@ -336,6 +336,7 @@ class KanbanMusumePlugin extends Plugin {
     this.showButton = null;
     this.loadedModelPath = "";
     this.messageTimer = 0;
+    this.animTimer = 0;
     this.idleTimer = 0;
     this.lastRandomMessage = "";
     this.hitokotoQueue = [];
@@ -371,6 +372,7 @@ class KanbanMusumePlugin extends Plugin {
 
   onunload() {
     clearTimeout(this.messageTimer);
+    clearTimeout(this.animTimer);
     clearTimeout(this.suppressShowButtonClickTimer);
     clearTimeout(this.hitokotoRetryTimer);
     clearInterval(this.idleTimer);
@@ -550,10 +552,12 @@ class KanbanMusumePlugin extends Plugin {
       return;
     }
     clearTimeout(this.messageTimer);
+    clearTimeout(this.animTimer);
     const wasActive = this.dialog.classList.contains("km-active");
     if (wasActive && this.dialog.textContent !== text) {
       this.dialog.classList.remove("km-active");
-      window.setTimeout(() => {
+      this.animTimer = window.setTimeout(() => {
+        this.animTimer = 0;
         this.dialog.textContent = text;
         this.dialog.classList.add("km-active");
         this.messageTimer = window.setTimeout(() => {
